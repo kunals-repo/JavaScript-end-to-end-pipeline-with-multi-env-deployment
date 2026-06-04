@@ -1,0 +1,293 @@
+
+name: Enterprise React Azure CI-CD
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  TF_VERSION: 1.8.5
+  NODE_VERSION: 20
+
+permissions:
+  contents: read
+
+
+# CI STAGE
+
+jobs:
+
+  ci:
+
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: react-app
+
+    outputs:
+      artifact-name: react-build
+
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup NodeJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run Unit Tests
+        run: npm test -- --watchAll=false
+
+      - name: NPM Security Scan
+        run: npm audit --audit-level=high
+
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+
+      - name: Build React Application
+        run: npm run build
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-build
+          path: react-app/dist
+
+
+# DEV ENVIRONMENT
+
+
+  deploy-dev:
+
+    needs: ci
+
+    runs-on: ubuntu-latest
+
+    environment: dev
+
+    default:
+      run:
+        working-directoy: terraform/
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: react-build
+          path: dist
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan DEV
+        run: terraform plan -var-file=environments/dev.tfvars -out=dev.tfplan
+
+      - name: Terraform Apply DEV
+        run: terraform apply -auto-approve dev.tfplan
+
+
+      -name: get storage account name output
+       id: terraform_outputs
+
+       run: echo "storage_acct_name=$(terraform output -raw storage_acct)" >> $GITHUB_OUTPUT
+
+       outputs:
+       storage_acct_name: ${{ steps.terraform_outputs.outputs.storage_acct_name }}
+
+
+      -name: get storage account website link
+       id: link_outputs
+
+       run: echo "storage_acct_link=$(terraform output -raw storage_link)" >> $GITHUB_OUTPUT
+
+
+     -name: Deploy the website to dev storage account
+       run: az storage blob upload-batch --account-name ${{ steps.terraform_outputs.outputs.storage_acct_name }} --destination '$web' --source dist/
+
+
+     -name: Testing accessibility of storage account link
+      run: curl -f ${{ steps.link_outputs.outputs.storage_acct_link }}
+
+
+
+# TEST ENVIRONMENT
+
+
+  deploy-test:
+
+    needs: deploy-dev
+
+    runs-on: ubuntu-latest
+
+    environment: test
+
+    default:
+      run:
+        working-directoy: terraform/
+
+    
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: react-build
+          path: dist
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan TEST
+        run: terraform plan -var-file=environments/test.tfvars -out=test.tfplan
+
+      - name: Terraform Apply TEST
+        run: terraform apply -auto-approve test.tfplan
+
+
+      -name: get storage account name output
+       id: terraform_outputs_test
+
+       run: echo "storage_acct_name_test =$(terraform output -raw storage_acct_test)" >> $GITHUB_OUTPUT
+
+       outputs:
+       storage_acct_name_test: ${{ steps.terraform_outputs_test.outputs.storage_acct_name_test }}
+
+
+      -name: get storage account website link
+       id: link_outputs_test
+
+       run: echo "storage_acct_link_test=$(terraform output -raw storage_link_test)" >> $GITHUB_OUTPUT
+
+
+     -name: Deploy the website to test storage account
+       run: az storage blob upload-batch --account-name ${{ steps.terraform_outputs_test.outputs.storage_acct_name_test }} --destination '$web' --source dist/
+
+
+     -name: Testing accessibility of storage account link
+      run: curl -f ${{ steps.link_outputs_test.outputs.storage_acct_link_test }}
+
+
+
+# PROD ENVIRONMENT
+
+
+  deploy-prod:
+
+    needs: deploy-test
+
+    runs-on: ubuntu-latest
+
+    environment: prod
+
+    default:
+      run:
+        working-directoy: terraform/
+
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: react-build
+          path: dist
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan PROD
+        run: terraform plan -var-file=environments/prod.tfvars -out=prod.tfplan
+
+      - name: Terraform Apply PROD
+        run: terraform apply -auto-approve prod.tfplan
+
+
+      -name: get storage account name output
+       id: terraform_outputs_prod
+
+       run: echo "storage_acct_name_prod=$(terraform output -raw storage_acct_prod)" >> $GITHUB_OUTPUT
+
+       outputs:
+       storage_acct_name_prod: ${{ steps.terraform_outputs_prod.outputs.storage_acct_name_prod }}
+
+
+
+      -name: get storage account website link
+       id: link_outputs_prod
+
+       run: echo "storage_acct_link_prod=$(terraform output -raw storage_link_prod)" >> $GITHUB_OUTPUT
+
+
+     -name: Deploy the website to prod storage account
+       run: az storage blob upload-batch --account-name ${{ steps.terraform_outputs_prod.outputs.storage_acct_name_prod }} --destination '$web' --source dist/
+
+
+     -name: Testing accessibility of storage account link
+      run: curl -f ${{ steps.link_outputs_prod.outputs.storage_acct_link_prod }}
+
+
+
+
+          
