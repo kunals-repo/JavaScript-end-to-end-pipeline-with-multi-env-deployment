@@ -5,13 +5,13 @@
 This project demonstrates a complete **Cloud DevOps CI/CD pipeline** for deploying a **React.js application** to **Microsoft Azure** using:
 
 * ⚛️ React.js
-* 
+  
 * ⚙️ GitHub Actions
-* 
+  
 * 🏗️ Terraform (Infrastructure as Code)
-* 
+  
 * ☁️ Azure Storage Static Website
-* 
+  
 * 🔐 DevSecOps Security Scanning
 
 
