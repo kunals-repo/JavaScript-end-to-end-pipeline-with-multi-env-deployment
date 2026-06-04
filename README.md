@@ -59,6 +59,6 @@ Deploy to PROD
 
 ✅ Security Scanning
 
-✅ Manual Production Approval
+✅ Configure deployment protection rules
 
 
